@@ -66,3 +66,6 @@ vectors/
 
 # Documentation build
 docs/_build/
+
+# PDF files
+*.pdf
