@@ -22,5 +22,7 @@ table = db.open_table("docling")
 # Search the table
 # --------------------------------------------------------------
 
+table.to_pandas()
+
 result = table.search(query="Executive summary", query_type="vector").limit(3)
 result.to_pandas()
