@@ -267,55 +267,106 @@ if st.button(process_button_label, type="primary", disabled=button_disabled):
             # Display results
             st.success(f"✅ Processed {len(results)} prompt files")
             
-            # Extract scores and identify files not getting 10/10
+            # Extract compliance status from results
             import re
-            scores_summary = {}
-            files_below_perfect = []
+            compliance_summary = {}
+            non_compliant_files = []
+            compliant_files = []
             
             for filename, result in results.items():
                 if result['status'] == 'Success':
-                    # Extract OVERALL SCORE using regex
-                    score_pattern = r'OVERALL SCORE:\s*(\d+(?:\.\d+)?)/10'
-                    match = re.search(score_pattern, result['response'], re.IGNORECASE)
+                    # Extract Overall Compliance using regex
+                    # Try multiple patterns to catch different formats
+                    patterns = [
+                        r'Overall\s*Compliance[:\s]*\*?\*?\s*(True|False)\b',
+                        r'Overall\s+Compliance[:\s]+(True|False)',
+                        r'Overall\s+Compliance:\s*(True|False)',
+                        r'Overall Compliance:\s*(True|False)',
+                        r'Overall Compliance\s+(True|False)'
+                    ]
+                    
+                    # Save response to debug file for inspection
+                    debug_filename = f"debug_{filename.replace('.txt', '')}_response.txt"
+                    with open(debug_filename, 'w', encoding='utf-8') as debug_file:
+                        debug_file.write(f"Response for {filename}:\n")
+                        debug_file.write("="*80 + "\n")
+                        debug_file.write(result['response'])
+                        debug_file.write("\n" + "="*80 + "\n")
+                    
+                    match = None
+                    for pattern in patterns:
+                        match = re.search(pattern, result['response'], re.IGNORECASE | re.MULTILINE)
+                        if match:
+                            break
                     
                     if match:
-                        score = float(match.group(1))
-                        scores_summary[filename] = score
-                        if score < 10:
-                            files_below_perfect.append((filename, score))
+                        compliance_status = match.group(1).lower() == 'true'                    
+                        compliance_summary[filename] = compliance_status
+                        if compliance_status:
+                            compliant_files.append(filename)
+                        else:
+                            non_compliant_files.append(filename)
                     else:
-                        scores_summary[filename] = "Score not found"
-                        files_below_perfect.append((filename, "N/A"))
+                        # Also show in Streamlit what text was searched
+                        st.warning(f"Could not find 'Overall Compliance' in {filename}")
+                        with st.expander(f"Show last 500 characters of {filename} response"):
+                            st.text(result['response'][-500:])
+                        compliance_summary[filename] = "Not found"
+                        non_compliant_files.append(filename)
                 else:
-                    scores_summary[filename] = "Error"
+                    compliance_summary[filename] = "Error"
+                    non_compliant_files.append(filename)
             
-            # Display summary of files not getting 10/10
+            # Display compliance summary
             st.markdown("---")
-            st.markdown("### 📊 Score Summary")
+            st.markdown("### 📊 Compliance Summary")
             
             col1, col2 = st.columns([1, 2])
             
             with col1:
                 st.metric("Total Files Processed", len(results))
-                st.metric("Perfect Scores (10/10)", len(results) - len(files_below_perfect))
-                st.metric("Below Perfect", len(files_below_perfect))
+                st.metric("✅ Compliant", len(compliant_files))
+                st.metric("❌ Non-Compliant", len(non_compliant_files))
             
             with col2:
-                if files_below_perfect:
-                    st.warning("**Files NOT getting 10/10:**")
-                    for filename, score in files_below_perfect:
-                        score_display = f"{score}/10" if isinstance(score, (int, float)) else score
-                        st.markdown(f"- **{filename.replace('.txt', '')}**: {score_display}")
-                else:
-                    st.success("🎉 All files received perfect scores (10/10)!")
+                if non_compliant_files:
+                    st.error("**Files NOT Compliant:**")
+                    for filename in non_compliant_files:
+                        status = compliance_summary.get(filename, "Unknown")
+                        if status == "Error":
+                            status_display = "⚠️ Error"
+                        elif status == "Not found":
+                            status_display = "❓ Compliance status not found"
+                        else:
+                            status_display = "❌ False"
+                        st.markdown(f"- **{filename.replace('.txt', '')}**: {status_display}")
+                
+                if compliant_files:
+                    st.success("**Compliant Files:**")
+                    for filename in compliant_files:
+                        st.markdown(f"- ✅ **{filename.replace('.txt', '')}**")
             
-            # Display all scores in an expandable section
-            with st.expander("View All Scores"):
-                scores_df = pd.DataFrame(
-                    [(k.replace('.txt', ''), v) for k, v in scores_summary.items()],
-                    columns=['Prompt File', 'Overall Score']
+            # Display all compliance results in an expandable section
+            with st.expander("View All Compliance Results"):
+                compliance_data = []
+                for k, v in compliance_summary.items():
+                    if v == True:
+                        status_str = "✅ Compliant"
+                    elif v == False:
+                        status_str = "❌ Non-Compliant"
+                    elif v == "Error":
+                        status_str = "⚠️ Error"
+                    elif v == "Not found":
+                        status_str = "❓ Not Found"
+                    else:
+                        status_str = str(v)
+                    compliance_data.append((k.replace('.txt', ''), status_str))
+                
+                compliance_df = pd.DataFrame(
+                    compliance_data,
+                    columns=['Prompt File', 'Compliance Status']
                 )
-                st.dataframe(scores_df, use_container_width=True)
+                st.dataframe(compliance_df, use_container_width=True)
             
             st.markdown("---")
             
@@ -325,10 +376,17 @@ if st.button(process_button_label, type="primary", disabled=button_disabled):
             for tab, (filename, result) in zip(tabs, results.items()):
                 with tab:
                     if result['status'] == 'Success':
-                        # Show score at the top if available
-                        if filename in scores_summary and isinstance(scores_summary[filename], (int, float)):
-                            score_color = "green" if scores_summary[filename] == 10 else "orange" if scores_summary[filename] >= 7 else "red"
-                            st.markdown(f"<h3 style='color: {score_color};'>Score: {scores_summary[filename]}/10</h3>", unsafe_allow_html=True)
+                        # Show compliance status at the top if available
+                        if filename in compliance_summary:
+                            compliance_status = compliance_summary[filename]
+                            if compliance_status == True:
+                                st.markdown("<h3 style='color: green;'>✅ Compliant</h3>", unsafe_allow_html=True)
+                            elif compliance_status == False:
+                                st.markdown("<h3 style='color: red;'>❌ Non-Compliant</h3>", unsafe_allow_html=True)
+                            elif compliance_status == "Not found":
+                                st.markdown("<h3 style='color: orange;'>❓ Compliance Status Not Found</h3>", unsafe_allow_html=True)
+                            else:
+                                st.markdown(f"<h3 style='color: gray;'>Status: {compliance_status}</h3>", unsafe_allow_html=True)
                         
                         st.markdown("### Evaluation Result")
                         st.markdown(result['response'])
